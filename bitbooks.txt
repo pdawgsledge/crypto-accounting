@@ -1,0 +1,839 @@
+//Clean all data and put into array of wallet addresses
+wallets = [];
+
+//Initialize arrays for each wallet address
+var addresses = [];
+var names = [];
+var rows = [];
+var balances = [];
+var transactions = [];
+var allTransactions = [];
+
+//Separate wallets by type for cleaning data
+var btcWallets = [];
+var ethWallets = [];
+
+//Initialize "Dashboard" sheet
+var app = SpreadsheetApp;
+var ss = app.getActiveSpreadsheet();
+var sheet = ss.getSheetByName('Dashboard');
+
+//Get address, name, and row for each wallet address
+for (var i=2;i<17;i++) {
+  
+  var address = sheet.getRange(i,1).getValue();
+  
+  if (address != "") {
+    
+    addresses.push(address);
+    
+    var name = sheet.getRange(i,2).getValue();
+    names.push(name);
+    
+    rows.push(i);
+    
+    //Separate wallets by type to get balance and transaction data
+    var checkEth = address.indexOf("0x");
+    
+    walletTrans = [];
+    
+    if (checkEth == 0.0) {
+      
+      ethWallets.push(address);
+      
+      var balUrl = 'https://api.etherscan.io/api?module=account&action=balance&address=' + address + '&tag=latest&apikey=YourApiKeyToken';
+      var balResponse = UrlFetchApp.fetch(balUrl);
+      var balance = JSON.parse(balResponse.getContentText())['result'] * Math.pow(10,-18);
+      
+      balances.push(balance);
+      
+      var transUrl = 'http://api.etherscan.io/api?module=account&action=txlist&address=' + address + '&startblock=0&endblock=99999999&sort=desc&apikey=YourApiKeyToken';
+      var transResponse = UrlFetchApp.fetch(transUrl);
+      var trans = JSON.parse(transResponse.getContentText())['result'];
+      
+      
+      for (var t=0;t<trans.length;t++) {
+        var tx = {};
+        tx['date'] = new Date(trans[t]['timeStamp'] * 1000).toLocaleString();
+        tx['timeStamp'] = trans[t]['timeStamp'];
+        tx['from'] = trans[t]['from'];
+        tx['to'] = trans[t]['to'];
+        tx['value'] = trans[t]['value'] * Math.pow(10,-18);
+        tx['fee'] = trans[t]['gasPrice'] * trans[t]['gasUsed'] * Math.pow(10,-18);
+        
+        trans[t] = tx;
+        walletTrans.push(tx);
+        allTransactions.push(trans[t]);
+        
+      }
+      transactions.push(walletTrans);
+      
+    } else {
+      
+      btcWallets.push(address);
+      var transUrl = 'https://blockexplorer.com/api/txs/?address=' + address;
+      var transResponse = UrlFetchApp.fetch(transUrl,{muteHttpExceptions : true});
+      var trans = JSON.parse(transResponse.getContentText())['txs'];
+      
+      var balUrl = 'https://blockexplorer.com/api/addr/' + address + '/balance';
+      var balResponse = UrlFetchApp.fetch(balUrl);
+      var balance = JSON.parse(balResponse.getContentText()) * Math.pow(10,-8);
+      
+      balances.push(balance);
+      
+      function findWithAttr(array, attr, value) {
+        for (var x=0;x<array.length;x++) {
+          if (array[x][attr] === value) {
+            return x;
+          }
+        }
+        return -1;
+      }
+      
+      Logger.log(trans.length);
+      //Get relevant transaction data
+      for (var t=0;t<trans.length;t++) {
+        var tx = {};
+        
+        //Get from and to addresses
+        thisTx = trans[t];
+        inputs = [];
+        outputs = [];
+        
+        for (var q=0;q<thisTx['vin'].length;q++) {
+          inputs.push(thisTx['vin'][q]['addr']);
+        }
+        for (var p=0;p<thisTx['vout'].length;p++) {
+          outputs.push(thisTx['vout'][p]['scriptPubKey']['addresses']);
+        }
+        Logger.log(inputs);
+        outputs = [].concat.apply([], outputs);
+        Logger.log(outputs);
+        
+        tx['date'] = new Date(thisTx['time'] * 1000).toLocaleString();
+        tx['timeStamp'] = thisTx['time'];
+        
+        if (inputs.indexOf(address) == -1) {
+          tx['from'] = inputs;
+          tx['to'] = address;
+          tx['value'] = thisTx['vout'][outputs.indexOf(address)]['value'];
+        } else {
+          tx['from'] = address;
+          tx['to'] = outputs;
+          tx['value'] = thisTx['vin'][inputs.indexOf(address)]['value'];
+        };
+        
+        tx['fee'] = thisTx['fees'];
+        trans[t] = tx;
+        walletTrans.push(tx);
+        allTransactions.push(trans[t]);  
+      };
+      transactions.push(walletTrans);   
+    };
+  };
+};
+
+for (var w=0;w<addresses.length;w++) {
+  var wallet = {};
+  
+  wallet['address'] = addresses[w];
+  wallet['name'] = names[w];
+  wallet['row'] = rows[w];
+  wallet['balance'] = balances[w];
+  wallet['txs'] = transactions[w];
+  
+  wallets.push(wallet);
+  
+};
+
+//Create a compare function that sorts by timestamp
+function byTimestamp(a,b) {
+  if (a['timeStamp'] < b['timeStamp']) {
+    return 1};
+  if (a['timeStamp'] > b['timeStamp']) {
+    return -1};
+  return 0;
+}
+
+
+
+
+
+function getDashboard() {
+  
+  /*  
+  //Cycle through each wallet's token info
+  for (var j=0;j<wallets.length;j++) {
+    var tokenUrl = 'https://api.ethplorer.io/getAddressInfo/' + wallets[j] + '?apiKey=freekey&token=0xa13f0743951b4f6e3e3aa039f682e17279f52bc3';
+    var response = UrlFetchApp.fetch(tokenUrl);
+    var tokenInfo = JSON.parse(response.getContentText())['tokens'];
+    
+    //Collect symbol of each token in wallet
+    var tokens = [];
+    for (var token=0;token<tokenInfo.length;token++) {
+      tokens.push(tokenInfo[token]['tokenInfo']['symbol']);
+    };
+    
+    //Check if SENC is in wallet
+    if (tokens.indexOf('SENC') >= 0) {
+      //Use the index of SENC to push its balance to an array
+      sencBalances.push(tokenInfo[tokens.indexOf('SENC')]['balance'] * Math.pow(10,-18));
+    } else {
+      //Or push 0 if SENC is not found in wallet's tokens
+      sencBalances.push(0);
+    };
+    
+  };
+  */
+  
+  //Sort all transactions by timestamp and get the first 15 transactions from the array
+  transactions.sort(byTimestamp);
+  latestTrans = transactions.slice(0,15);
+  
+  //Filter wallets, replace with names
+  for (var tx=0;tx<latestTrans.length;tx++) {
+    var sender = latestTrans[tx]['from'];
+    var recipient = latestTrans[tx]['to'];
+    var checkSender = addresses.indexOf(sender);
+    var checkRecipient = addresses.indexOf(recipient);
+    
+    if (checkSender >= 0) {
+      latestTrans[tx]['from'] = names[checkSender];
+    };
+    
+    if (checkRecipient >= 0) {
+      latestTrans[tx]['to'] = names[checkRecipient];
+    };
+    
+  };
+  
+  var latestTrans = ObjApp.objectToArray(['date','from','to','value'],latestTrans);
+
+  sheet.getRange(20,1,latestTrans.length,4).setValues(latestTrans);
+  
+
+  var btc_usd = sheet.getRange(2,8).getValue();
+  var eth_usd = sheet.getRange(3,8).getValue();
+    
+  walletInfo = [];
+
+  for (var i=0; i<addresses.length; i++) {
+    var checkEth = addresses[i].indexOf("0x");
+    if (checkEth == 0) {
+      walletInfo[i] = [0,balances[i],balances[i]*eth_usd];
+    } else {
+      walletInfo[i] = [balances[i],0,balances[i]*btc_usd];
+    };
+  }
+
+  for (var i=0;i<wallets.length;i++) {
+      sheet.getRange(rows[i],4,1,3).setValues([walletInfo[i]]);
+  }
+}
+
+
+
+
+function getWallets() {
+  
+  for (var i=0;i<addresses.length;i++) {
+    
+    var address = addresses[i];
+    var name = names[i];
+    var trans = transactions[i];
+
+    var transLength = trans.length;
+    
+    if (ss.getSheetByName(name) === null && transLength != 0) {
+      
+      ss.insertSheet().setName(name);
+      var sheet = ss.getSheetByName(name);
+    
+      sheet.setColumnWidth(1,250);
+      sheet.setColumnWidth(2,130);
+      sheet.setColumnWidth(3,350);
+      sheet.setColumnWidth(4,130);
+      sheet.setColumnWidth(5,350);
+      sheet.setColumnWidth(6,130);
+      sheet.setColumnWidths(7,8,120);
+      sheet.setColumnWidth(9,240);
+      sheet.setColumnWidth(10,120);
+    
+      sheet.getRange('A1').setValue('Wallet Name & Address:');
+      sheet.getRange('A2').setValue('Wallet Purpose:');
+      sheet.getRange('B1').setValue(name);
+      //sheet.getRange('B2').setValue(walletPurpose);
+      sheet.getRange('C1').setValue(address);
+      sheet.getRange('A1:A2').setFontWeight('bold');
+      sheet.getRange('A1:A2').setHorizontalAlignment('center');
+      
+      sheet.getRange('A3').setValue('Date');
+      sheet.getRange('B3').setValue('From');
+      sheet.getRange('C3').setValue('Address');
+      sheet.getRange('D3').setValue('To');
+      sheet.getRange('E3').setValue('Address');
+      sheet.getRange('F3').setValue('Value');
+      sheet.getRange('G3').setValue('Tx Fee');
+      sheet.getRange('H3').setValue('Balance');
+      sheet.getRange('I3').setValue('Description');
+      sheet.getRange('J3').setValue('Tx ID');
+      sheet.getRange('A3:J3').setFontWeight('bold');
+      sheet.getRange('A3:J3').setHorizontalAlignment('center');
+      sheet.getRange('A3:J3').setBackground('#719fff');
+      sheet.getRange('H4').setValue(balances[i]);
+      
+      txArray = ObjApp.objectToArray(['date','from','to','value','fee'], trans);
+      
+      for (var j=0;j<txArray.length;j++) {
+        txArray[j].splice(1,0,'');
+        txArray[j].splice(3,0,'');
+      };
+      
+      sheet.getRange(4,1,transLength,7).setValues(txArray);      
+      
+      //Add name labels to relevant senders and recipients
+      var senders = sheet.getRange(4,2,transLength,2).getValues();
+      var recipients = sheet.getRange(4,4,transLength,2).getValues();
+    
+      for (var tx=0;tx<transLength;tx++) {
+        var checkSender = addresses.indexOf(senders[tx][1]);
+        var checkRecipient = addresses.indexOf(recipients[tx][1]);
+        
+        if (checkSender >= 0) {
+          senders[tx][0] = names[checkSender];}
+        
+        if (checkRecipient >= 0) {
+          recipients[tx][0] = names[checkRecipient];}
+      };
+      
+      sheet.getRange(4,2,transLength,2).setValues(senders);
+      sheet.getRange(4,4,transLength,2).setValues(recipients);
+      
+      //Color code each transaction for "In" and "Out"
+      for (var row=0;row<transLength;row++) {
+        if (senders[row][0] == name){
+          sheet.getRange(row+4,1,1,6).setBackground('#ff9c9c');
+        } else {
+          sheet.getRange(row+4,1,1,6).setBackground('#bde6bd');
+        };
+      };
+      
+      //sheet.getRange(1,3,transLength,1).setBorder(null,null,null,true,null,null);
+      
+      //Color other transaction info blue
+      sheet.getRange(4,7,transLength,4).setBackground('#b5d1ff');
+      
+      
+      var txValues = sheet.getRange(4,6,transLength+1,3).getValues();
+    
+      for (var bal=0;bal<transLength;bal++) {
+        if (senders[bal][0] == name) {
+            txValues[bal+1][2] = txValues[bal][2] + txValues[bal][0] + txValues[bal][1];
+        } else {
+            txValues[bal+1][2] = txValues[bal][2] - txValues[bal][0];
+        };
+      };
+      sheet.getRange(4,6,transLength+1,3).setValues(txValues);
+      sheet.getRange(4,9,transLength+1,1).setNumberFormat('0.##');
+      sheet.getRange(4,6,transLength,1).setHorizontalAlignment('right');
+      var txCosts = sheet.getRange(4,7,transLength,1).getValues();
+    };
+  }}
+      /*
+      for (var b=0;b<transLength;b++) {
+        if (recipients[b][0] == name) {
+          txCosts[b][0] = 0;
+        };
+      };
+    }
+      sheet.getRange(4,7,transLength,1).setValues(txCosts);
+      */ 
+  
+
+
+ 
+function getWalletTransactions(wallet) {
+  
+  var ethUrl = 'http://api.etherscan.io/api?module=account&action=txlist&address=' + wallet + '&startblock=0&endblock=99999999&sort=desc&apikey=YourApiKeyToken';
+  var ethResponse = UrlFetchApp.fetch(ethUrl);
+  var ethWalletTrans = JSON.parse(ethResponse.getContentText())['result'];
+  
+  var intUrl = 'http://api.etherscan.io/api?module=account&action=txlistinternal&address=' + wallet + '&startblock=0&endblock=9999999&sort=asc&apikey=YourApiKeyToken';
+  var intResponse = UrlFetchApp.fetch(intUrl);
+  var intWalletTrans = JSON.parse(intResponse.getContentText())['result'];
+   
+  var walletTrans = ethWalletTrans.concat(intWalletTrans);
+  walletTrans.sort(byTimestamp);
+  var trans = []
+  
+  for (var i=0; i<walletTrans.length; i++) {
+    
+    //Add if internal transaction (no tx fee)
+    if (walletTrans[i]['gasUsed'] == 0) {
+      trans.push([(new Date(walletTrans[i]['timeStamp'] * 1000)).toLocaleString(),'',walletTrans[i]['from'],'',walletTrans[i]['to'],walletTrans[i]['value'] * Math.pow(10,-18),0]);
+    }
+    //Add if valid normal transaction
+    else if (walletTrans[i]['isError'] == 1) {
+     trans.push([(new Date(walletTrans[i]['timeStamp'] * 1000)).toLocaleString(),'',walletTrans[i]['from'],'',walletTrans[i]['to'],0,walletTrans[i]['gasPrice'] * walletTrans[i]['gasUsed'] * Math.pow(10,-18)]);
+    }
+    else {
+      trans.push([(new Date(walletTrans[i]['timeStamp'] * 1000)).toLocaleString(),'',walletTrans[i]['from'],'',walletTrans[i]['to'],walletTrans[i]['value'] * Math.pow(10,-18),walletTrans[i]['gasPrice'] * walletTrans[i]['gasUsed'] * Math.pow(10,-18)]);
+    }
+  }
+  return trans
+}
+
+
+function getSencTransactions(wallet) {
+  
+  var tokenUrl = 'https://api.etherscan.io/api?module=account&action=tokentx&address=' + wallet + '&page=1&offset=1000&sort=asc&apikey=YourApiKeyToken';
+  var tokenResponse = UrlFetchApp.fetch(tokenUrl);
+  var walletTrans = JSON.parse(tokenResponse.getContentText())['result'];
+  walletTrans.sort(byTimestamp);
+  var trans = []
+  
+  for (var i=0; i<walletTrans.length; i++) {
+
+    //Add if token transaction
+    if (walletTrans[i]['tokenSymbol'] == 'SENC') {
+      trans.push([(new Date(walletTrans[i]['timeStamp'] * 1000)).toLocaleString(),'',walletTrans[i]['from'],'',walletTrans[i]['to'],walletTrans[i]['value'] * Math.pow(10,-18),walletTrans[i]['gasPrice'] * walletTrans[i]['gasUsed'] * Math.pow(10,-18)]);
+    }
+  }
+  return trans
+}
+
+
+function getTimeStamps(wallet) {
+
+  var time = [];
+  var walletTrans = getWalletTransactions(wallet);
+
+  for (var i=0; i<walletTrans.length; i++) {
+    time.push(walletTrans[i]);
+  }
+  Logger.log(time)
+  return time;
+}
+
+function getIndex(arr, k) {
+  for (var i = 0; i < arr.length; i++) {
+    var index = arr[i].indexOf(k);
+    if (index > -1) {
+      return i;
+    }
+  }
+}
+
+
+
+ 
+ function updateWallets() {
+    for (var i=0;i<wallets.length;i++) {
+    
+      var walletName = ss.getSheetByName('Dashboard').getRange(rows[i],2).getValue();
+      var walletAddress = ss.getSheetByName('Dashboard').getRange(rows[i],1).getValue();
+      var walletPurpose = ss.getSheetByName('Dashboard').getRange(rows[i],3).getValue();
+      
+      var sheet = ss.getSheetByName(walletName);
+      var transactions = getWalletTransactions(wallets[i]);
+      
+      var lastTimeStamp = sheet.getRange(4,1).getValue();
+      var timeStamp = getIndex(transactions, lastTimeStamp);
+      
+      if (timeStamp == 0) {
+        continue;
+      } else {
+        sheet.insertRows(4,timeStamp)}
+      
+      
+      var newTransactions = transactions.slice(0, timeStamp); 
+      var newTransLength = newTransactions.length;
+      var transLength = transactions.length;
+      
+      sheet.getRange(4,1,newTransLength,7).setValues(newTransactions);      
+      
+      var senders = sheet.getRange(4,2,transLength,2).getValues();
+      var recipients = sheet.getRange(4,4,transLength,2).getValues();
+      
+      for (var wall=0;wall<transLength;wall++) {
+        var checkSender = wallets.indexOf(senders[wall][1]);
+        var checkRecipient = wallets.indexOf(recipients[wall][1]);
+        
+        if (checkSender >= 0) {
+          senders[wall][0] = walletNames[checkSender];
+        };
+        
+        if (checkRecipient >= 0) {
+          recipients[wall][0] = walletNames[checkRecipient];
+        };
+      }
+      
+      sheet.getRange(4,2,transLength,2).setValues(senders);
+      sheet.getRange(4,4,transLength,2).setValues(recipients);
+      
+      
+      for (var row=0;row<transLength;row++) {
+        if (senders[row][0] == walletName){
+          sheet.getRange(row+4,1,1,6).setBackground('#ff9c9c');
+        } else {
+          sheet.getRange(row+4,1,1,6).setBackground('#bde6bd');
+        };
+      }
+      
+      //sheet.getRange(1,3,transLength,1).setBorder(null,null,null,true,null,null);
+      sheet.getRange(4,7,transLength,4).setBackground('#b5d1ff');
+      sheet.getRange('H4').setValue(parseFloat(ss.getSheetByName('Dashboard').getRange(rows[i],4).getValue()));
+      
+      var txValues = sheet.getRange(4,6,transLength+1,3).getValues();
+      
+      for (var bal=0;bal<transLength;bal++) {
+        if (senders[bal][0] == walletName) {
+   
+            txValues[bal+1][2] = txValues[bal][2] + txValues[bal][0] + txValues[bal][1];
+          
+        } else {
+          
+            txValues[bal+1][2] = txValues[bal][2] - txValues[bal][0];
+          
+          }
+        }
+      
+      sheet.getRange(4,6,transLength+1,3).setValues(txValues);
+      sheet.getRange(4,9,transLength+1,1).setNumberFormat('0.##')
+      sheet.getRange(4,6,transLength,1).setHorizontalAlignment('right');
+      
+      var txCosts = sheet.getRange(4,7,transLength,1).getValues()
+       for (var bal=0;bal<transLength;bal++) {
+        if (recipients[bal][0] == walletName) {
+          txCosts[bal][0] = 0;
+        }
+       }
+      sheet.getRange(4,7,transLength,1).setValues(txCosts);
+     
+    }
+  }
+
+      
+function getSencWallets() {
+  for (var i=0;i<wallets.length;i++) {
+    
+    var walletName = ss.getSheetByName('Dashboard').getRange(rows[i],2).getValue() + " SENC";
+    var walletAddress = ss.getSheetByName('Dashboard').getRange(rows[i],1).getValue();
+    var walletPurpose = ss.getSheetByName('Dashboard').getRange(rows[i],3).getValue();
+    var transactions = getSencTransactions(wallets[i]);
+    var transLength = transactions.length;
+    
+    Logger.log(transactions)
+    
+    if (ss.getSheetByName(walletName) === null && transLength != 0) {
+      
+      ss.insertSheet().setName(walletName);
+      var sheet = ss.getSheetByName(walletName);
+    
+      sheet.setColumnWidth(1,250);
+      sheet.setColumnWidth(2,130);
+      sheet.setColumnWidth(3,350);
+      sheet.setColumnWidth(4,130);
+      sheet.setColumnWidth(5,350);
+      sheet.setColumnWidth(6,130);
+      sheet.setColumnWidths(7,8,120);
+      sheet.setColumnWidth(9,240);
+      sheet.setColumnWidth(10,120);
+    
+      sheet.getRange('A1').setValue('Wallet Name & Address:');
+      sheet.getRange('A2').setValue('Wallet Purpose:');
+      sheet.getRange('B1').setValue(walletName);
+      sheet.getRange('B2').setValue(walletPurpose);
+      sheet.getRange('C1').setValue(walletAddress);
+      sheet.getRange('A1:A2').setFontWeight('bold');
+      sheet.getRange('A1:A2').setHorizontalAlignment('center');
+      
+      sheet.getRange('A3').setValue('Date');
+      sheet.getRange('B3').setValue('From');
+      sheet.getRange('C3').setValue('Address');
+      sheet.getRange('D3').setValue('To');
+      sheet.getRange('E3').setValue('Address');
+      sheet.getRange('F3').setValue('Value');
+      sheet.getRange('G3').setValue('Tx Fee');
+      sheet.getRange('H3').setValue('Balance');
+      sheet.getRange('I3').setValue('Purpose');
+      sheet.getRange('J3').setValue('Tx ID');
+      sheet.getRange('A3:J3').setFontWeight('bold');
+      sheet.getRange('A3:J3').setHorizontalAlignment('center');
+      sheet.getRange('A3:J3').setBackground('#719fff');
+      sheet.getRange('H4').setValue(parseFloat(ss.getSheetByName('Dashboard').getRange(rows[i],5).getValue()));
+      sheet.getRange(4,1,transLength,7).setValues(transactions);      
+      
+      var senders = sheet.getRange(4,2,transLength,2).getValues();
+      var recipients = sheet.getRange(4,4,transLength,2).getValues();
+      
+      for (var wall=0;wall<transLength;wall++) {
+        var checkSender = wallets.indexOf(senders[wall][1]);
+        var checkRecipient = wallets.indexOf(recipients[wall][1]);
+        
+        if (checkSender >= 0) {
+          senders[wall][0] = sencNames[checkSender];
+        };
+        
+        if (checkRecipient >= 0) {
+          recipients[wall][0] = sencNames[checkRecipient];
+        };
+      }
+      
+      sheet.getRange(4,2,transLength,2).setValues(senders);
+      sheet.getRange(4,4,transLength,2).setValues(recipients);
+      
+      
+      for (var row=0;row<transLength;row++) {
+        if (senders[row][0] == walletName){
+          sheet.getRange(row+4,1,1,6).setBackground('#ff9c9c');
+        } else {
+          sheet.getRange(row+4,1,1,6).setBackground('#bde6bd');
+        };
+      }
+      
+      //sheet.getRange(1,3,transLength,1).setBorder(null,null,null,true,null,null);
+      sheet.getRange(4,7,transLength,4).setBackground('#b5d1ff');
+      
+      
+      var txValues = sheet.getRange(4,6,transLength+1,3).getValues();
+      
+      for (var bal=0;bal<transLength;bal++) {
+        if (senders[bal][0] == walletName) {
+          
+            txValues[bal+1][2] = txValues[bal][2] + txValues[bal][0];
+          
+        } else {
+          
+            txValues[bal+1][2] = txValues[bal][2] - txValues[bal][0];
+          
+          }
+        }
+
+      sheet.getRange(4,6,transLength+1,3).setValues(txValues);
+      sheet.getRange(4,9,transLength+1,1).setNumberFormat('0.##')
+      sheet.getRange(4,6,transLength,1).setHorizontalAlignment('right');
+ 
+  var txCosts = sheet.getRange(4,7,transLength,1).getValues()
+       for (var bal=0;bal<transLength;bal++) {
+        if (recipients[bal][0] == walletName) {
+          txCosts[bal][0] = 0;
+        }
+       }
+      sheet.getRange(4,7,transLength,1).setValues(txCosts);
+    }
+  } 
+}
+
+
+function updateSencWallets() {
+  for (var i=0;i<wallets.length;i++) {
+    
+     var walletName = ss.getSheetByName('Dashboard').getRange(rows[i],2).getValue() + " SENC";
+     var walletAddress = ss.getSheetByName('Dashboard').getRange(rows[i],1).getValue();
+     var walletPurpose = ss.getSheetByName('Dashboard').getRange(rows[i],3).getValue();    
+  
+      var sheet = ss.getSheetByName(walletName);
+      var transactions = getSencTransactions(wallets[i]);
+      
+      var lastTimeStamp = sheet.getRange(4,1).getValue();
+      var timeStamp = getIndex(transactions, lastTimeStamp);
+      
+      if (timeStamp == 0) {
+        continue;
+      } else {
+        sheet.insertRows(4,timeStamp)}
+      
+      
+      var newTransactions = transactions.slice(0, timeStamp); 
+      var newTransLength = newTransactions.length;
+      var transLength = transactions.length;
+      
+      sheet.getRange(4,1,newTransLength,7).setValues(newTransactions);      
+      
+      var senders = sheet.getRange(4,2,transLength,2).getValues();
+      var recipients = sheet.getRange(4,4,transLength,2).getValues();
+      
+      for (var wall=0;wall<transLength;wall++) {
+        var checkSender = wallets.indexOf(senders[wall][1]);
+        var checkRecipient = wallets.indexOf(recipients[wall][1]);
+        
+        if (checkSender >= 0) {
+          senders[wall][0] = sencNames[checkSender];
+        };
+        
+        if (checkRecipient >= 0) {
+          recipients[wall][0] = sencNames[checkRecipient];
+        };
+      }
+      
+      sheet.getRange(4,2,transLength,2).setValues(senders);
+      sheet.getRange(4,4,transLength,2).setValues(recipients);
+      
+      
+      for (var row=0;row<transLength;row++) {
+        if (senders[row][0] == walletName){
+          sheet.getRange(row+4,1,1,6).setBackground('#ff9c9c');
+        } else {
+          sheet.getRange(row+4,1,1,6).setBackground('#bde6bd');
+        };
+      }
+      
+      //sheet.getRange(1,3,transLength,1).setBorder(null,null,null,true,null,null);
+      sheet.getRange(4,7,transLength,4).setBackground('#b5d1ff');
+      sheet.getRange('H4').setValue(parseFloat(ss.getSheetByName('Dashboard').getRange(rows[i],5).getValue()));
+      
+      var txValues = sheet.getRange(4,6,transLength+1,3).getValues();
+      
+      for (var bal=0;bal<transLength;bal++) {
+        if (senders[bal][0] == walletName) {
+            txValues[bal+1][2] = txValues[bal][2] + txValues[bal][0];
+        } else {
+            txValues[bal+1][2] = txValues[bal][2] - txValues[bal][0];
+          }
+        }
+      
+      sheet.getRange(4,6,transLength+1,3).setValues(txValues);
+      sheet.getRange(4,9,transLength+1,1).setNumberFormat('0.##')
+      sheet.getRange(4,6,transLength,1).setHorizontalAlignment('right');
+      
+      var txCosts = sheet.getRange(4,7,transLength,1).getValues();
+       for (var bal=0;bal<transLength;bal++) {
+        if (recipients[bal][0] == walletName) {
+          txCosts[bal][0] = 0;
+        }
+       }
+      sheet.getRange(4,7,transLength,1).setValues(txCosts);
+     
+    }
+  }
+
+
+function getEthPrice(e) {
+  
+  var editRange = {
+    top: 2,
+    bottom: 5000,
+    left: 1,
+    right: 1
+  };
+  
+  var sheet = e.source.getActiveSheet();
+  if (sheet.getName() != 'General Ledger') return;
+  
+  var thisRow = e.range.getRow();
+  if (thisRow < editRange.top || thisRow > editRange.bottom) return;
+  
+  var thisCol = e.range.getColumn();
+  if (thisCol < editRange.left || thisCol > editRange.right) return;
+  
+  
+
+  if (e.value === undefined) {
+    sheet.getRange(thisRow,5,1,2).setValue("");
+  } else {
+    
+    var thisDate = e.value;
+    var timeStamp = Math.floor(new Date(thisDate).getTime() / 1000);
+    
+    var url = 'https://poloniex.com/public?command=returnChartData&currencyPair=USDT_ETH&start=' + timeStamp + '&end=' + timeStamp + '&period=86400';
+    var response = UrlFetchApp.fetch(url);
+    var rate = JSON.parse(response.getContentText())[0]['close'];
+    
+    sheet.getRange(thisRow,5).setValue(rate);
+  };
+   
+}
+
+
+
+function noEdit(e) {
+  
+  var editRange = {
+    top: 2,
+    bottom: 5000,
+    left: 5,
+    right: 6
+  };
+  
+  var sheet = e.source.getActiveSheet();
+  if (sheet.getName() != 'General Ledger') return;
+  
+  var thisRow = e.range.getRow();
+  if (thisRow < editRange.top || thisRow > editRange.bottom) return;
+  
+  var thisCol = e.range.getColumn();
+  if (thisCol < editRange.left || thisCol > editRange.right) return;
+  
+  e.range.setValue(e.oldValue);
+}
+
+function getEthAmount(e) {
+  
+  var editRange = {
+    top: 2,
+    bottom: 5000,
+    left: 4,
+    right: 4
+  };
+  
+  var sheet = e.source.getActiveSheet();
+  if (sheet.getName() != 'General Ledger') return;
+  
+  var thisRow = e.range.getRow();
+  if (thisRow < editRange.top || thisRow > editRange.bottom) return;
+  
+  var thisCol = e.range.getColumn();
+  if (thisCol < editRange.left || thisCol > editRange.right) return;
+  
+  var rate = parseFloat(sheet.getRange(thisRow,5).getValue());
+
+  
+  
+  if (e.value === undefined) {
+    sheet.getRange(thisRow,6).setValue("");
+  } else {
+    sheet.getRange(thisRow,6).setValue(e.value/rate);
+  };
+}
+
+
+
+function getFullLedger() {
+  var allTrans = [];
+  
+  Logger.log(wallets);
+  for (var wallie=0;wallie<wallets.length;wallie++) {
+    var url = 'https://api.etherscan.io/api?module=account&action=txlist&address=' + wallets[wallie] + '&startblock=0&endblock=99999999&page=1&offset=5000&sort=desc&apikey=YourApiKeyToken';
+    var response = UrlFetchApp.fetch(url);
+    var trans = JSON.parse(response.getContentText())['result'];
+    Logger.log(trans);
+    for (var tx=0;tx<trans.length;tx++) {
+      allTrans.push(trans[tx]);
+    }
+  }
+  
+  function compare(a,b) {
+    if (a['blockNumber'] < b['blockNumber'])
+      return -1;
+    if (a['blockNumber'] > b['blockNumber'])
+      return 1;
+    return 0
+  }
+  
+  allTrans.sort(compare);
+  Logger.log(allTrans);
+  var finalTrans = []
+  Logger.log(finalTrans);
+  for (var iter=0;iter<allTrans.length;iter++) {
+    finalTrans.push([(new Date(allTrans[iter]['timeStamp'] * 1000)).toLocaleString(),allTrans[iter]['from'],allTrans[iter]['to'],allTrans[iter]['value'] * Math.pow(10,-18)]);
+  }
+  
+  ss.getSheetByName('General Ledger').getRange(2,1,finalTrans.length,4).setValues(finalTrans);
+}
+
+function getUSDtoSGD(value, date) {
+  var url = 'https://openexchangerates.org/api/historical/' + date + '&base=USD';
+  var response = UrlFetchApp.fetch(url);
+  var rate = JSON.parse(response.getContentText());  
+}
